@@ -1,0 +1,4 @@
+github.com/Kacperbrozyna/learning_go_repo/http_link_parser v0.0.0-20250225085521-c62ff5eb627b h1:G3PVSqMu12kdri5NofCTDe0Aw7q/deFe+KS1owjUn0U=
+github.com/Kacperbrozyna/learning_go_repo/http_link_parser v0.0.0-20250225085521-c62ff5eb627b/go.mod h1:21bgyX2yfHbUT8Gc879NavgFZirfKJaw1rCiA5cbCbA=
+golang.org/x/net v0.35.0 h1:T5GQRQb2y08kTAByq9L4/bz8cipCdA8FbRTXewonqY8=
+golang.org/x/net v0.35.0/go.mod h1:EglIi67kWsHKlRzzVMUD93VMSWGFOMSZgxFjparz1Qk=
