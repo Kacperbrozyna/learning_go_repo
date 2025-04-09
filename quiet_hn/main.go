@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gophercises/quiet_hn/hn"
@@ -29,27 +32,34 @@ func main() {
 }
 
 func handler(numStories int, tpl *template.Template) http.HandlerFunc {
+
+	sc := storyCache{
+		numStories: numStories,
+		duration:   time.Second * 6,
+	}
+
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		for {
+			<-ticker.C
+			temp := storyCache{
+				numStories: numStories,
+				duration:   6 * time.Second,
+			}
+			temp.stories()
+			sc.mutex.Lock()
+			sc.cache = temp.cache
+			sc.expiration = temp.expiration
+			sc.mutex.Unlock()
+			<-ticker.C
+		}
+	}()
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		var client hn.Client
-		ids, err := client.TopItems()
+		stories, err := sc.stories()
 		if err != nil {
-			http.Error(w, "Failed to load top stories", http.StatusInternalServerError)
-			return
-		}
-		var stories []item
-		for _, id := range ids {
-			hnItem, err := client.GetItem(id)
-			if err != nil {
-				continue
-			}
-			item := parseHNItem(hnItem)
-			if isStoryLink(item) {
-				stories = append(stories, item)
-				if len(stories) >= numStories {
-					break
-				}
-			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		data := templateData{
 			Stories: stories,
@@ -61,6 +71,98 @@ func handler(numStories int, tpl *template.Template) http.HandlerFunc {
 			return
 		}
 	})
+}
+
+type storyCache struct {
+	cache      []item
+	expiration time.Time
+	duration   time.Duration
+	mutex      sync.Mutex
+	numStories int
+}
+
+func (sc *storyCache) stories() ([]item, error) {
+	sc.mutex.Lock()
+	defer sc.mutex.Unlock()
+
+	if time.Now().Sub(sc.expiration) < 0 {
+		return sc.cache, nil
+	}
+
+	stories, err := getTopStories(sc.numStories)
+	if err != nil {
+		return nil, err
+	}
+
+	sc.expiration = time.Now().Add(6 * time.Second)
+	sc.cache = stories
+	return sc.cache, nil
+}
+
+func getTopStories(numStories int) ([]item, error) {
+	var client hn.Client
+	ids, err := client.TopItems()
+	if err != nil {
+		return nil, errors.New("Failed to load top stories")
+	}
+
+	var stories []item
+	at := 0
+	for len(stories) < numStories {
+		need := numStories - len(stories)*5/4
+
+		stories = append(stories, getStories(ids[at:at+need])...)
+		at += need
+	}
+
+	return stories[:numStories], nil
+}
+
+func getStories(ids []int) []item {
+	type result struct {
+		idx  int
+		item item
+		err  error
+	}
+
+	resultCh := make(chan result)
+	for i := 0; i < len(ids); i++ {
+		go func(index, id int) {
+			var client hn.Client
+			hnItem, err := client.GetItem(id)
+			if err != nil {
+				resultCh <- result{
+					idx: index,
+					err: err}
+			}
+			resultCh <- result{
+				item: parseHNItem(hnItem),
+				idx:  index}
+		}(i, ids[i])
+	}
+
+	var results []result
+
+	for i := 0; i < len(ids); i++ {
+		results = append(results, <-resultCh)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].idx < results[j].idx
+	})
+
+	var stories []item
+	for _, res := range results {
+		if res.err != nil {
+			continue
+		}
+
+		if isStoryLink(res.item) {
+			stories = append(stories, res.item)
+		}
+	}
+
+	return stories
 }
 
 func isStoryLink(item item) bool {
